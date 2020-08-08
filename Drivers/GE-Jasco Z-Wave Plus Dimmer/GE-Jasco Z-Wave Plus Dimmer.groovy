@@ -26,6 +26,7 @@
  *  2.3.0 (10/25/2019) - Fixed setLevel=0 to turn off device as expected, resolved regression introduced in 2.1.0. 
  *  2.4.0 (12/07/2019) - Tweaks to Association code
  *  2.5.0 (05/17/2020) - Updated text of steps/duration
+ *  2.5.1 (08/08/2020) - Added defaultLevel parameter
  */
 
 metadata {
@@ -53,7 +54,7 @@ metadata {
 
  preferences {
 
-	        input (
+        input (
             type: "paragraph",
             element: "paragraph",
             title: "Dimmer General Settings",
@@ -62,6 +63,7 @@ metadata {
 
 	    input "paramLED", "enum", title: "LED Behavior", multiple: false, options: ["0" : "LED ON When Switch OFF (default)", "1" : "LED ON When Switch ON", "2" : "LED Always OFF"], required: false, displayDuringSetup: true
 	    input "paramInverted", "enum", title: "Dimmer Buttons Direction", multiple: false, options: ["0" : "Normal (default)", "1" : "Inverted"], required: false, displayDuringSetup: true
+        input "defaultLevel", "number", title: "Default Level\nDefault 0: Return to last state", defaultValue: "0", range: "0..99", required: false, displayDuringSetup: true
 
 	        input (
             type: "paragraph",
@@ -74,7 +76,7 @@ metadata {
 		input "paramZDuration", "number", title: "Z-Wave Dimming Interval Between Steps (in 10ms increments)", multiple: false, defaultValue: "3", range: "1..255", required: false, displayDuringSetup: true
 	    input "paramPSteps", "number", title: "Physical Dimming % Per Step", multiple: false, defaultValue: "1", range: "1..99", required: false, displayDuringSetup: true
 		input "paramPDuration", "number", title: "Physical Dimming Interval Between Steps (in 10ms increments)", multiple: false, defaultValue: "3", range: "1..255", required: false, displayDuringSetup: true
-	 
+   
         input (
             type: "paragraph",
             element: "paragraph",
@@ -99,7 +101,7 @@ metadata {
         )
 			input ( type: "paragraph", element: "paragraph", title: "", description: "Logging")
 			input name: "logEnable", type: "bool", title: "Enable debug logging", defaultValue: false	
-			input name: "logDesc", type: "bool", title: "Enable descriptionText logging", defaultValue: true	
+			input name: "logDesc", type: "bool", title: "Enable descriptionText logging", defaultValue: true
 	 
     }
 }
@@ -204,6 +206,10 @@ def zwaveEvent(hubitat.zwave.commands.configurationv2.ConfigurationReport cmd) {
             name = "inverted"
             value = reportValue == 1 ? "true" : "false"
             break
+        case 32:
+            name = "defaultLevel"
+            value = reportValue
+            break
         default:
             break
     }
@@ -291,13 +297,31 @@ def zwaveEvent(hubitat.zwave.Command cmd) {
 // Driver Commands / Functions
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 def on() {
+    def cmds = []
+  	def delay = (paramZSteps * paramZDuration).longValue() + 1000
 	if (logEnable) log.debug "Turn device ON"
 	//state.bin = -1
+
 	if (logEnable) log.debug "state.level is $state.level"
-	if (state.level == 0 || state.level == "") {state.level=99}
+ 	if (logEnable) log.debug "defaultLevel is $defaultLevel" 
+  
+	//if (state.level == 0 || state.level == "") {state.level=99}
 	//setLevel(state.level, 0)
+  
 	sendEvent(name: "switch", value: "on", descriptionText: "$device.displayName was turned on [digital]", type: "digital", isStateChange: true)
-   	result = zwave.basicV1.basicSet(value: 0xFF).format()
+  
+  	if (defaultLevel > 0) {  // if we have a defaultLevel set, use it. 
+//		using switchMultiLevelSet instead of basicSet so that we have predictable and programmable ramp-up.
+		cmds << zwave.switchMultilevelV2.switchMultilevelSet(value: defaultLevel, dimmingDuration: delay/1000).format()
+//		cmds << zwave.basicV1.basicSet(value: defaultLevel).format()
+	} else {
+		cmds << zwave.basicV1.basicSet(value: 0xFF).format()  // 0xFF = 255 
+	}
+  
+	zwave.basicV1.basicSet(value: 1).format() // This particular dimmer always turns on when a value > 0 is sent, so turn it on initially with a value of 1.
+  
+    result = delayBetween(cmds, 5000) //delay
+  
 }
 
 def off() {
@@ -330,6 +354,16 @@ def setLevel(value, duration) {
 	}
 }
 
+def setDefaultLevel(value) {
+	if (logEnable) log.debug "setDefaultLevel($value)" 
+	level = Math.max(Math.min(value, 99), 1)
+	sendEvent(name: "defaultLevel", value: value, displayed: false)
+    def cmds = []
+	cmds << zwave.configurationV2.configurationSet(scaledConfigurationValue: defaultLevel.toInteger(), parameterNumber: 32, size: 1).format()
+	cmds << zwave.configurationV2.configurationGet(parameterNumber: 32).format()
+    delayBetween(cmds,1000)
+}
+
 def refresh() {
 	log.info "refresh() is called"
 	
@@ -341,6 +375,7 @@ def refresh() {
     cmds << zwave.configurationV2.configurationGet(parameterNumber: 8).format()
     cmds << zwave.configurationV2.configurationGet(parameterNumber: 9).format()
     cmds << zwave.configurationV2.configurationGet(parameterNumber: 10).format()
+    cmds << zwave.configurationV2.configurationGet(parameterNumber: 32).format()
     cmds << zwave.associationV2.associationGet(groupingIdentifier: 2).format()
     cmds << zwave.associationV2.associationGet(groupingIdentifier: 3).format()
     if (getDataValue("MSR") == null) {
@@ -427,6 +462,13 @@ def updated() {
 	}
 	cmds << zwave.configurationV2.configurationSet(scaledConfigurationValue: paramPDuration.toInteger(), parameterNumber: 10, size: 2).format()
 	cmds << zwave.configurationV2.configurationGet(parameterNumber: 10).format()
+  
+  	// Set Default Level
+	if (defaultLevel==null) {
+		defaultLevel = 0
+	}
+	cmds << zwave.configurationV2.configurationSet(scaledConfigurationValue: defaultLevel.toInteger(), parameterNumber: 32, size: 1).format()
+	cmds << zwave.configurationV2.configurationGet(parameterNumber: 32).format()
 
     delayBetween(cmds, 1000)
 }
@@ -437,6 +479,7 @@ def configure() {
     if (state.level == "") {state.level = 99}
     def cmds = []
     sendEvent(name: "numberOfButtons", value: 2)
+  	cmds << zwave.configurationV2.configurationGet(parameterNumber: 32).format()
 	cmds << zwave.associationV2.associationSet(groupingIdentifier:1, nodeId:zwaveHubNodeId).format()
 	cmds << zwave.associationV2.associationRemove(groupingIdentifier:2, nodeId:zwaveHubNodeId).format()
 	cmds << zwave.associationV2.associationSet(groupingIdentifier:3, nodeId:zwaveHubNodeId).format()
