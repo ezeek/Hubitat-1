@@ -40,6 +40,8 @@ metadata {
 		capability "Switch"
 		capability "Switch Level"
 		capability "Light"
+      
+      	command "setDefaultLevel", [[name:"Default ON %",type:"NUMBER", description:"Default Dimmer Level Used when Turning ON. (0=Last Dimmer Value)", range: "0..99"]]
 		
         fingerprint mfr:"0063", prod:"4944", model:"3038", ver: "5.26", deviceJoinName: "GE Z-Wave Plus Wall Dimmer"
 	    fingerprint mfr:"0063", prod:"4944", model:"3038", ver: "5.27", deviceJoinName: "GE Z-Wave Plus Wall Dimmer"
@@ -196,7 +198,7 @@ def zwaveEvent(hubitat.zwave.commands.configurationv2.ConfigurationReport cmd) {
     def result = []
 	def name = ""
     def value = ""
-    def reportValue = cmd.configurationValue[0]
+    def reportValue = cmd.configurationValue[0] //[0]
     switch (cmd.parameterNumber) {
         case 3:
             name = "indicatorStatus"
@@ -206,9 +208,9 @@ def zwaveEvent(hubitat.zwave.commands.configurationv2.ConfigurationReport cmd) {
             name = "inverted"
             value = reportValue == 1 ? "true" : "false"
             break
-        case 32:
-            name = "defaultLevel"
-            value = reportValue
+//        case 32:
+//            name = "defaultLevel"
+//            value = reportValue
             break
         default:
             break
@@ -356,11 +358,14 @@ def setLevel(value, duration) {
 
 def setDefaultLevel(value) {
 	if (logEnable) log.debug "setDefaultLevel($value)" 
-	level = Math.max(Math.min(value, 99), 1)
-	sendEvent(name: "defaultLevel", value: value, displayed: false)
+	if (logEnable) log.debug "current defaultLevel: $defaultLevel"
+
+    //value = Math.max(Math.min(value, 99), 1)
+
+	sendEvent(name: "defaultLevel", value: value, displayed: true)
     def cmds = []
-	cmds << zwave.configurationV2.configurationSet(scaledConfigurationValue: defaultLevel.toInteger(), parameterNumber: 32, size: 1).format()
-	cmds << zwave.configurationV2.configurationGet(parameterNumber: 32).format()
+    cmds << zwave.configurationV1.configurationSet(scaledConfigurationValue: value , parameterNumber: 32, size: 1).format()
+  	cmds << zwave.configurationV1.configurationGet(parameterNumber: 32).format()
     delayBetween(cmds,1000)
 }
 
